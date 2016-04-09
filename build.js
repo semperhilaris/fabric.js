@@ -248,6 +248,11 @@ var filesToInclude = [
   ifSpecifiedInclude('textbox', 'src/mixins/textbox_behavior.mixin.js'),
   ifSpecifiedInclude('textbox', 'src/mixins/textbox_click_behavior.mixin.js'),
 
+  // Custom Shapes
+  'src/shapes/custom_path.class.js',
+  'src/shapes/path_text.class.js',
+  'src/shapes/circle_text.class.js',
+
   ifSpecifiedInclude('node', 'src/node.js'),
 
   ifSpecifiedAMDInclude(amdLib)
