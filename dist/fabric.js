@@ -2534,12 +2534,12 @@ return root;
     if (!this.__eventListeners[eventName]) {
       return;
     }
-
+    var eventListener = this.__eventListeners[eventName];
     if (handler) {
-      fabric.util.removeFromArray(this.__eventListeners[eventName], handler);
+      eventListener[eventListener.indexOf(handler)] = false;
     }
     else {
-      this.__eventListeners[eventName].length = 0;
+      fabric.util.array.fill(eventListener, false);
     }
   }
 
@@ -2590,7 +2590,9 @@ return root;
 
     // remove all key/value pairs (event name -> event handler)
     if (arguments.length === 0) {
-      this.__eventListeners = { };
+      for (eventName in this.__eventListeners) {
+        _removeEventListener.call(this, eventName);
+      }
     }
     // one object with key/value pairs was passed
     else if (arguments.length === 1 && typeof arguments[0] === 'object') {
@@ -2625,9 +2627,11 @@ return root;
     }
 
     for (var i = 0, len = listenersForEvent.length; i < len; i++) {
-      // avoiding try/catch for perf. reasons
-      listenersForEvent[i].call(this, options || { });
+      listenersForEvent[i] && listenersForEvent[i].call(this, options || { });
     }
+    this.__eventListeners[eventName] = listenersForEvent.filter(function(value) {
+      return value !== false;
+    });
     return this;
   }
 
@@ -3920,6 +3924,17 @@ fabric.Collection = {
   /**
    * @private
    */
+  function fill(array, value) {
+    var k = array.length;
+    while (k--) {
+      array[k] = value;
+    }
+    return array;
+  }
+
+  /**
+   * @private
+   */
   function find(array, byProperty, condition) {
     if (!array || array.length === 0) {
       return;
@@ -3948,6 +3963,7 @@ fabric.Collection = {
    * @namespace fabric.util.array
    */
   fabric.util.array = {
+    fill: fill,
     invoke: invoke,
     min: min,
     max: max
@@ -4985,7 +5001,13 @@ if (typeof console !== 'undefined') {
       s = p / 4;
     }
     else {
-      s = p / (2 * Math.PI) * Math.asin(c / a);
+      //handle the 0/0 case:
+      if (c === 0 && a === 0) {
+        s = p / (2 * Math.PI) * Math.asin(1);
+      }
+      else {
+        s = p / (2 * Math.PI) * Math.asin(c / a);
+      }
     }
     return { a: a, c: c, p: p, s: s };
   }
@@ -5479,11 +5501,11 @@ if (typeof console !== 'undefined') {
   function _setStrokeFillOpacity(attributes) {
     for (var attr in colorAttributes) {
 
-      if (typeof attributes[colorAttributes[attr]] === 'undefined') {
+      if (typeof attributes[colorAttributes[attr]] === 'undefined' || attributes[attr] === '') {
         continue;
       }
 
-      if (!attributes[attr]) {
+      if (typeof attributes[attr] === 'undefined') {
         if (!fabric.Object.prototype[attr]) {
           continue;
         }
@@ -8686,14 +8708,9 @@ fabric.Pattern = fabric.util.createClass(/** @lends fabric.Pattern.prototype */ 
     _setImageSmoothing: function() {
       var ctx = this.getContext();
 
-      if (typeof ctx.imageSmoothingEnabled !== 'undefined') {
-        ctx.imageSmoothingEnabled = this.imageSmoothingEnabled;
-        return;
-      }
-      ctx.webkitImageSmoothingEnabled = this.imageSmoothingEnabled;
-      ctx.mozImageSmoothingEnabled    = this.imageSmoothingEnabled;
-      ctx.msImageSmoothingEnabled     = this.imageSmoothingEnabled;
-      ctx.oImageSmoothingEnabled      = this.imageSmoothingEnabled;
+      ctx.imageSmoothingEnabled = ctx.imageSmoothingEnabled || ctx.webkitImageSmoothingEnabled
+        || ctx.mozImageSmoothingEnabled || ctx.msImageSmoothingEnabled || ctx.oImageSmoothingEnabled;
+      ctx.imageSmoothingEnabled = this.imageSmoothingEnabled;
     },
 
     /**
@@ -9164,7 +9181,7 @@ fabric.Pattern = fabric.util.createClass(/** @lends fabric.Pattern.prototype */ 
     renderAll: function () {
       var canvasToDrawOn = this.contextContainer, objsToRender;
 
-      if (this.contextTop && this.selection && !this._groupSelector) {
+      if (this.contextTop && this.selection && !this._groupSelector && !this.isDrawingMode) {
         this.clearContext(this.contextTop);
       }
 
@@ -9799,7 +9816,6 @@ fabric.Pattern = fabric.util.createClass(/** @lends fabric.Pattern.prototype */ 
      */
     dispose: function () {
       this.clear();
-      this.interactive && this.removeListeners();
       return this;
     },
 
@@ -11087,16 +11103,19 @@ fabric.PatternBrush = fabric.util.createClass(fabric.PencilBrush, /** @lends fab
      * @private
      * @param {Number} x pointer's x coordinate
      * @param {Number} y pointer's y coordinate
+     * @return {Boolean} true if the translation occurred
      */
     _translateObject: function (x, y) {
-      var target = this._currentTransform.target;
+      var transform = this._currentTransform,
+          target = transform.target,
+          newLeft = x - transform.offsetX,
+          newTop = y - transform.offsetY,
+          moveX = !target.get('lockMovementX') && target.left !== newLeft,
+          moveY = !target.get('lockMovementY') && target.top !== newTop;
 
-      if (!target.get('lockMovementX')) {
-        target.set('left', x - this._currentTransform.offsetX);
-      }
-      if (!target.get('lockMovementY')) {
-        target.set('top', y - this._currentTransform.offsetY);
-      }
+      moveX && target.set('left', newLeft);
+      moveY && target.set('top', newTop);
+      return moveX || moveY;
     },
 
     /**
@@ -11140,15 +11159,16 @@ fabric.PatternBrush = fabric.util.createClass(fabric.PencilBrush, /** @lends fab
      * @param {Number} x pointer's x coordinate
      * @param {Number} y pointer's y coordinate
      * @param {String} by Either 'x' or 'y'
+     * @return {Boolean} true if the skewing occurred
      */
     _skewObject: function (x, y, by) {
       var t = this._currentTransform,
-          target = t.target,
+          target = t.target, skewed = false,
           lockSkewingX = target.get('lockSkewingX'),
           lockSkewingY = target.get('lockSkewingY');
 
       if ((lockSkewingX && by === 'x') || (lockSkewingY && by === 'y')) {
-        return;
+        return false;
       }
 
       // Get the constraint point
@@ -11162,15 +11182,21 @@ fabric.PatternBrush = fabric.util.createClass(fabric.PencilBrush, /** @lends fab
 
       constraintPosition = target.translateToOriginPoint(center, t.originX, t.originY);
       // Actually skew the object
-      this._setObjectSkew(actualMouseByOrigin, t, by, dim);
+      skewed = this._setObjectSkew(actualMouseByOrigin, t, by, dim);
       t.lastX = x;
       t.lastY = y;
       // Make sure the constraints apply
       target.setPositionByOrigin(constraintPosition, t.originX, t.originY);
+      return skewed;
     },
 
+    /**
+     * Set object skew
+     * @private
+     * @return {Boolean} true if the skewing occurred
+     */
     _setObjectSkew: function(localMouse, transform, by, _dim) {
-      var target = transform.target, newValue,
+      var target = transform.target, newValue, skewed = false,
           skewSign = transform.skewSign, newDim, dimNoSkew,
           otherBy, _otherBy, _by, newDimMouse, skewX, skewY;
 
@@ -11199,12 +11225,14 @@ fabric.PatternBrush = fabric.util.createClass(fabric.PencilBrush, /** @lends fab
                                         (dimNoSkew[otherBy] / target['scale' + _otherBy]));
         newValue = fabric.util.radiansToDegrees(newValue);
       }
+      skewed = target['skew' + _by] !== newValue;
       target.set('skew' + _by, newValue);
       if (target['skew' + _otherBy] !== 0) {
         newDim = target._getTransformedDimensions();
         newValue = (_dim[otherBy] / newDim[otherBy]) * target['scale' + _otherBy];
         target.set('scale' + _otherBy, newValue);
       }
+      return skewed;
     },
 
     /**
@@ -11214,6 +11242,7 @@ fabric.PatternBrush = fabric.util.createClass(fabric.PencilBrush, /** @lends fab
      * @param {Number} y pointer's y coordinate
      * @param {String} by Either 'x' or 'y' - specifies dimension constraint by which to scale an object.
      *                    When not provided, an object is scaled by both dimensions equally
+     * @return {Boolean} true if the scaling occurred
      */
     _scaleObject: function (x, y, by) {
       var t = this._currentTransform,
@@ -11223,74 +11252,83 @@ fabric.PatternBrush = fabric.util.createClass(fabric.PencilBrush, /** @lends fab
           lockScalingFlip = target.get('lockScalingFlip');
 
       if (lockScalingX && lockScalingY) {
-        return;
+        return false;
       }
 
       // Get the constraint point
       var constraintPosition = target.translateToOriginPoint(target.getCenterPoint(), t.originX, t.originY),
           localMouse = target.toLocalPoint(new fabric.Point(x, y), t.originX, t.originY),
-          dim = target._getTransformedDimensions();
+          dim = target._getTransformedDimensions(), scaled = false;
 
       this._setLocalMouse(localMouse, t);
 
       // Actually scale the object
-      this._setObjectScale(localMouse, t, lockScalingX, lockScalingY, by, lockScalingFlip, dim);
+      scaled = this._setObjectScale(localMouse, t, lockScalingX, lockScalingY, by, lockScalingFlip, dim);
 
       // Make sure the constraints apply
       target.setPositionByOrigin(constraintPosition, t.originX, t.originY);
+      return scaled;
     },
 
     /**
      * @private
+     * @return {Boolean} true if the scaling occurred
      */
     _setObjectScale: function(localMouse, transform, lockScalingX, lockScalingY, by, lockScalingFlip, _dim) {
-      var target = transform.target, forbidScalingX = false, forbidScalingY = false;
+      var target = transform.target, forbidScalingX = false, forbidScalingY = false, scaled = false,
+          changeX, changeY, scaleX, scaleY;
 
-      transform.newScaleX = localMouse.x * target.scaleX / _dim.x;
-      transform.newScaleY = localMouse.y * target.scaleY / _dim.y;
+      scaleX = localMouse.x * target.scaleX / _dim.x;
+      scaleY = localMouse.y * target.scaleY / _dim.y;
+      changeX = target.scaleX !== scaleX;
+      changeY = target.scaleY !== scaleY;
 
-      if (lockScalingFlip && transform.newScaleX <= 0 && transform.newScaleX < target.scaleX) {
+      if (lockScalingFlip && scaleX <= 0 && scaleX < target.scaleX) {
         forbidScalingX = true;
       }
 
-      if (lockScalingFlip && transform.newScaleY <= 0 && transform.newScaleY < target.scaleY) {
+      if (lockScalingFlip && scaleY <= 0 && scaleY < target.scaleY) {
         forbidScalingY = true;
       }
 
       if (by === 'equally' && !lockScalingX && !lockScalingY) {
-        forbidScalingX || forbidScalingY || this._scaleObjectEqually(localMouse, target, transform, _dim);
+        forbidScalingX || forbidScalingY || (scaled = this._scaleObjectEqually(localMouse, target, transform, _dim));
       }
       else if (!by) {
-        forbidScalingX || lockScalingX || target.set('scaleX', transform.newScaleX);
-        forbidScalingY || lockScalingY || target.set('scaleY', transform.newScaleY);
+        forbidScalingX || lockScalingX || (target.set('scaleX', scaleX) && (scaled = scaled || changeX));
+        forbidScalingY || lockScalingY || (target.set('scaleY', scaleY) && (scaled = scaled || changeY));
       }
       else if (by === 'x' && !target.get('lockUniScaling')) {
-        forbidScalingX || lockScalingX || target.set('scaleX', transform.newScaleX);
+        forbidScalingX || lockScalingX || (target.set('scaleX', scaleX) && (scaled = scaled || changeX));
       }
       else if (by === 'y' && !target.get('lockUniScaling')) {
-        forbidScalingY || lockScalingY || target.set('scaleY', transform.newScaleY);
+        forbidScalingY || lockScalingY || (target.set('scaleY', scaleY) && (scaled = scaled || changeY));
       }
-
+      transform.newScaleX = scaleX;
+      transform.newScaleY = scaleY;
       forbidScalingX || forbidScalingY || this._flipObject(transform, by);
-
+      return scaled;
     },
 
     /**
      * @private
+     * @return {Boolean} true if the scaling occurred
      */
     _scaleObjectEqually: function(localMouse, target, transform, _dim) {
 
       var dist = localMouse.y + localMouse.x,
           lastDist = _dim.y * transform.original.scaleY / target.scaleY +
-                     _dim.x * transform.original.scaleX / target.scaleX;
+                     _dim.x * transform.original.scaleX / target.scaleX,
+          scaled;
 
       // We use transform.scaleX/Y instead of target.scaleX/Y
       // because the object may have a min scale and we'll loose the proportions
       transform.newScaleX = transform.original.scaleX * dist / lastDist;
       transform.newScaleY = transform.original.scaleY * dist / lastDist;
-
+      scaled = transform.newScaleX !== target.scaleX || transform.newScaleY !== target.scaleY;
       target.set('scaleX', transform.newScaleX);
       target.set('scaleY', transform.newScaleY);
+      return scaled;
     },
 
     /**
@@ -11375,13 +11413,14 @@ fabric.PatternBrush = fabric.util.createClass(fabric.PencilBrush, /** @lends fab
      * @private
      * @param {Number} x pointer's x coordinate
      * @param {Number} y pointer's y coordinate
+     * @return {Boolean} true if the rotation occurred
      */
     _rotateObject: function (x, y) {
 
       var t = this._currentTransform;
 
       if (t.target.get('lockRotation')) {
-        return;
+        return false;
       }
 
       var lastAngle = atan2(t.ey - t.top, t.ex - t.left),
@@ -11394,6 +11433,7 @@ fabric.PatternBrush = fabric.util.createClass(fabric.PencilBrush, /** @lends fab
       }
 
       t.target.angle = angle % 360;
+      return true;
     },
 
     /**
@@ -11852,6 +11892,25 @@ fabric.PatternBrush = fabric.util.createClass(fabric.PencilBrush, /** @lends fab
     },
 
     /**
+     * Clears a canvas element and removes all event listeners
+     * @return {fabric.Canvas} thisArg
+     * @chainable
+     */
+    dispose: function () {
+      this.callSuper('dispose');
+      var wrapper = this.wrapperEl;
+      this.removeListeners();
+      wrapper.removeChild(this.upperCanvasEl);
+      wrapper.removeChild(this.lowerCanvasEl);
+      delete this.upperCanvasEl;
+      if (wrapper.parentNode) {
+        wrapper.parentNode.replaceChild(this.lowerCanvasEl, this.wrapperEl);
+      }
+      delete this.wrapperEl;
+      return this;
+    },
+
+    /**
      * Draws objects' controls (borders/controls)
      * @param {CanvasRenderingContext2D} ctx Context to render controls on
      */
@@ -12208,14 +12267,12 @@ fabric.PatternBrush = fabric.util.createClass(fabric.PencilBrush, /** @lends fab
       }
 
       target.setCoords();
+      this._restoreOriginXY(target);
 
-      // only fire :modified event if target coordinates were changed during mousedown-mouseup
-      if (this.stateful && target.hasStateChanged()) {
+      if (transform.actionPerformed || (this.stateful && target.hasStateChanged())) {
         this.fire('object:modified', { target: target });
         target.fire('modified');
       }
-
-      this._restoreOriginXY(target);
     },
 
     /**
@@ -12473,6 +12530,7 @@ fabric.PatternBrush = fabric.util.createClass(fabric.PencilBrush, /** @lends fab
         }
       }
       else {
+
         this._transformObject(e);
       }
 
@@ -12504,37 +12562,32 @@ fabric.PatternBrush = fabric.util.createClass(fabric.PencilBrush, /** @lends fab
       var x = pointer.x,
           y = pointer.y,
           target = transform.target,
-          action = transform.action;
+          action = transform.action,
+          actionPerformed = false;
 
       if (action === 'rotate') {
-        this._rotateObject(x, y);
-        this._fire('rotating', target, e);
+        (actionPerformed = this._rotateObject(x, y)) && this._fire('rotating', target, e);
       }
       else if (action === 'scale') {
-        this._onScale(e, transform, x, y);
-        this._fire('scaling', target, e);
+        (actionPerformed = this._onScale(e, transform, x, y)) && this._fire('scaling', target, e);
       }
       else if (action === 'scaleX') {
-        this._scaleObject(x, y, 'x');
-        this._fire('scaling', target, e);
+        (actionPerformed = this._scaleObject(x, y, 'x')) && this._fire('scaling', target, e);
       }
       else if (action === 'scaleY') {
-        this._scaleObject(x, y, 'y');
-        this._fire('scaling', target, e);
+        (actionPerformed = this._scaleObject(x, y, 'y')) && this._fire('scaling', target, e);
       }
       else if (action === 'skewX') {
-        this._skewObject(x, y, 'x');
-        this._fire('skewing', target, e);
+        (actionPerformed = this._skewObject(x, y, 'x')) && this._fire('skewing', target, e);
       }
       else if (action === 'skewY') {
-        this._skewObject(x, y, 'y');
-        this._fire('skewing', target, e);
+        (actionPerformed = this._skewObject(x, y, 'y')) && this._fire('skewing', target, e);
       }
       else {
-        this._translateObject(x, y);
-        this._fire('moving', target, e);
+        (actionPerformed = this._translateObject(x, y)) && this._fire('moving', target, e);
         this.setCursor(this.moveCursor);
       }
+      transform.actionPerformed = actionPerformed;
     },
 
     /**
@@ -12565,13 +12618,14 @@ fabric.PatternBrush = fabric.util.createClass(fabric.PencilBrush, /** @lends fab
 
     /**
      * @private
+     * @return {Boolean} true if the scaling occurred
      */
     _onScale: function(e, transform, x, y) {
       // rotate object only if shift key is not pressed
       // and if it is not a group we are transforming
       if ((e.shiftKey || this.uniScaleTransform) && !transform.target.get('lockUniScaling')) {
         transform.currentAction = 'scale';
-        this._scaleObject(x, y);
+        return this._scaleObject(x, y);
       }
       else {
         // Switch from a normal resize to proportional
@@ -12580,7 +12634,7 @@ fabric.PatternBrush = fabric.util.createClass(fabric.PencilBrush, /** @lends fab
         }
 
         transform.currentAction = 'scaleEqually';
-        this._scaleObject(x, y, 'equally');
+        return this._scaleObject(x, y, 'equally');
       }
     },
 
@@ -17830,8 +17884,8 @@ fabric.util.object.extend(fabric.Object.prototype, /** @lends fabric.Object.prot
      * @private
      * @param {CanvasRenderingContext2D} ctx Context to render on
      */
-    _render: function(ctx) {
-      if (!fabric.Polygon.prototype.commonRender.call(this, ctx)) {
+    _render: function(ctx, noTransform) {
+      if (!fabric.Polygon.prototype.commonRender.call(this, ctx, noTransform)) {
         return;
       }
       this._renderFill(ctx);
@@ -20127,14 +20181,14 @@ fabric.util.object.extend(fabric.Object.prototype, /** @lends fabric.Object.prot
      * @return {Object} Object representation of an instance
      */
     toObject: function(propertiesToInclude) {
-      var filters = [ ];
+      var filters = [ ], element = this._originalElement;
       this.filters.forEach(function(filterObj) {
         if (filterObj) {
           filters.push(filterObj.toObject());
         }
       });
       var object = extend(this.callSuper('toObject', propertiesToInclude), {
-        src: this._originalElement.src || this._originalElement._src,
+        src: element ? element.src || element._src : '',
         filters: filters,
         crossOrigin: this.crossOrigin,
         alignX: this.alignX,
@@ -22887,11 +22941,18 @@ fabric.Image.filters.BaseFilter = fabric.util.createClass(/** @lends fabric.Imag
     },
 
     /**
+     * Returns true because text has no style
+     */
+    isEmptyStyles: function() {
+      return true;
+    },
+
+    /**
      * @private
      * @param {CanvasRenderingContext2D} ctx Context to render on
      */
     _renderTextFill: function(ctx) {
-      if (!this.fill && !this._skipFillStrokeCheck) {
+      if (!this.fill && this.isEmptyStyles()) {
         return;
       }
 
@@ -22918,7 +22979,7 @@ fabric.Image.filters.BaseFilter = fabric.util.createClass(/** @lends fabric.Imag
      * @param {CanvasRenderingContext2D} ctx Context to render on
      */
     _renderTextStroke: function(ctx) {
-      if ((!this.stroke || this.strokeWidth === 0) && !this._skipFillStrokeCheck) {
+      if ((!this.stroke || this.strokeWidth === 0) && this.isEmptyStyles()) {
         return;
       }
 
@@ -23681,13 +23742,6 @@ fabric.Image.filters.BaseFilter = fabric.util.createClass(/** @lends fabric.Imag
 
     /**
      * @private
-     * @type Boolean
-     * @default
-     */
-    _skipFillStrokeCheck: false,
-
-    /**
-     * @private
      */
     _reSpace: /\s|\n/,
 
@@ -24345,7 +24399,7 @@ fabric.Image.filters.BaseFilter = fabric.util.createClass(/** @lends fabric.Imag
      */
     _applyCharStylesGetWidth: function(ctx, _char, lineIndex, charIndex, decl) {
       var charDecl = this._getStyleDeclaration(lineIndex, charIndex),
-          styleDeclaration = decl || clone(charDecl), width;
+          styleDeclaration = (decl && clone(decl)) || clone(charDecl), width;
 
       this._applyFontStyles(styleDeclaration);
 
@@ -24374,7 +24428,15 @@ fabric.Image.filters.BaseFilter = fabric.util.createClass(/** @lends fabric.Imag
 
       ctx.lineWidth = styleDeclaration.strokeWidth || this.strokeWidth;
       ctx.font = this._getFontDeclaration.call(styleDeclaration);
-      this._setShadow.call(styleDeclaration, ctx);
+
+      //if we want this._setShadow.call to work with styleDeclarion
+      //we have to add those references
+      if (styleDeclaration.shadow) {
+        styleDeclaration.scaleX = this.scaleX;
+        styleDeclaration.scaleY = this.scaleY;
+        styleDeclaration.canvas = this.canvas;
+        this._setShadow.call(styleDeclaration, ctx);
+      }
 
       if (!this.caching || !this._charWidthsCache[cacheProp]) {
         width = ctx.measureText(_char).width;
@@ -24967,7 +25029,7 @@ fabric.Image.filters.BaseFilter = fabric.util.createClass(/** @lends fabric.Imag
      * @return {fabric.IText} thisArg
      * @chainable
      */
-    enterEditing: function() {
+    enterEditing: function(e) {
       if (this.isEditing || !this.editable) {
         return;
       }
@@ -24978,7 +25040,7 @@ fabric.Image.filters.BaseFilter = fabric.util.createClass(/** @lends fabric.Imag
 
       this.isEditing = true;
 
-      this.initHiddenTextarea();
+      this.initHiddenTextarea(e);
       this.hiddenTextarea.focus();
       this._updateTextarea();
       this._saveEditingProps();
@@ -25050,13 +25112,37 @@ fabric.Image.filters.BaseFilter = fabric.util.createClass(/** @lends fabric.Imag
      * @private
      */
     _updateTextarea: function() {
-      if (!this.hiddenTextarea) {
+      if (!this.hiddenTextarea || this.inCompositionMode) {
         return;
       }
 
       this.hiddenTextarea.value = this.text;
       this.hiddenTextarea.selectionStart = this.selectionStart;
       this.hiddenTextarea.selectionEnd = this.selectionEnd;
+      if (this.selectionStart === this.selectionEnd) {
+        var p = this._calcTextareaPosition();
+        this.hiddenTextarea.style.left = p.x + 'px';
+        this.hiddenTextarea.style.top = p.y + 'px';
+      }
+    },
+
+    /**
+     * @private
+     */
+    _calcTextareaPosition: function() {
+      var chars = this.text.split(''),
+          boundaries = this._getCursorBoundaries(chars, 'cursor'),
+          cursorLocation = this.get2DCursorLocation(),
+          lineIndex = cursorLocation.lineIndex,
+          charIndex = cursorLocation.charIndex,
+          charHeight = this.getCurrentCharFontSize(lineIndex, charIndex),
+          leftOffset = (lineIndex === 0 && charIndex === 0)
+                    ? this._getLineLeftOffset(this._getLineWidth(this.ctx, lineIndex))
+                    : boundaries.leftOffset,
+          m = this.calcTransformMatrix(),
+          p = { x: boundaries.left + leftOffset, y: boundaries.top + boundaries.topOffset + charHeight };
+      this.hiddenTextarea.style.fontSize = charHeight + 'px';
+      return fabric.util.transformPoint(p, m);
     },
 
     /**
@@ -25514,7 +25600,7 @@ fabric.util.object.extend(fabric.IText.prototype, /** @lends fabric.IText.protot
       }
 
       if (this.__lastSelected && !this.__corner) {
-        this.enterEditing();
+        this.enterEditing(options.e);
         this.initDelayedCursor(true);
       }
       this.selected = true;
@@ -25624,19 +25710,35 @@ fabric.util.object.extend(fabric.IText.prototype, /** @lends fabric.IText.protot
   /**
    * Initializes hidden textarea (needed to bring up keyboard in iOS)
    */
-  initHiddenTextarea: function() {
+  initHiddenTextarea: function(e) {
+    var p;
+    if (e && this.canvas) {
+      p = this.canvas.getPointer(e);
+    }
+    else {
+      this.oCoords || this.setCoords();
+      p = this.oCoords.tl;
+    }
     this.hiddenTextarea = fabric.document.createElement('textarea');
 
     this.hiddenTextarea.setAttribute('autocapitalize', 'off');
-    this.hiddenTextarea.style.cssText = 'position: fixed; bottom: 20px; left: 0px; opacity: 0;'
+    this.hiddenTextarea.style.cssText = 'position: absolute; top: ' + p.y + 'px; left: ' + p.x + 'px; opacity: 0;'
                                         + ' width: 0px; height: 0px; z-index: -999;';
-    fabric.document.body.appendChild(this.hiddenTextarea);
+    if (this.canvas) {
+      this.canvas.lowerCanvasEl.parentNode.appendChild(this.hiddenTextarea);
+    }
+    else {
+      fabric.document.body.appendChild(this.hiddenTextarea);
+    }
 
     fabric.util.addListener(this.hiddenTextarea, 'keydown', this.onKeyDown.bind(this));
+    fabric.util.addListener(this.hiddenTextarea, 'keyup', this.onKeyUp.bind(this));
     fabric.util.addListener(this.hiddenTextarea, 'input', this.onInput.bind(this));
     fabric.util.addListener(this.hiddenTextarea, 'copy', this.copy.bind(this));
+    fabric.util.addListener(this.hiddenTextarea, 'cut', this.cut.bind(this));
     fabric.util.addListener(this.hiddenTextarea, 'paste', this.paste.bind(this));
     fabric.util.addListener(this.hiddenTextarea, 'compositionstart', this.onCompositionStart.bind(this));
+    fabric.util.addListener(this.hiddenTextarea, 'compositionupdate', this.onCompositionUpdate.bind(this));
     fabric.util.addListener(this.hiddenTextarea, 'compositionend', this.onCompositionEnd.bind(this));
 
     if (!this._clickHandlerInitialized && this.canvas) {
@@ -25669,6 +25771,7 @@ fabric.util.object.extend(fabric.IText.prototype, /** @lends fabric.IText.protot
    */
   _ctrlKeysMap: {
     65: 'selectAll',
+    67: 'copy',
     88: 'cut'
   },
 
@@ -25688,7 +25791,25 @@ fabric.util.object.extend(fabric.IText.prototype, /** @lends fabric.IText.protot
     if (e.keyCode in this._keysMap) {
       this[this._keysMap[e.keyCode]](e);
     }
-    else if ((e.keyCode in this._ctrlKeysMap) && (e.ctrlKey || e.metaKey)) {
+    else {
+      return;
+    }
+    e.stopImmediatePropagation();
+    e.preventDefault();
+    this.canvas && this.canvas.renderAll();
+  },
+
+  /**
+   * Handles keyup event
+   * if a copy/cut event fired, keyup is dismissed
+   * @param {Event} e Event object
+   */
+  onKeyUp: function(e) {
+    if (!this.isEditing || this._copyDone) {
+      this._copyDone = false;
+      return;
+    }
+    if ((e.keyCode in this._ctrlKeysMap) && (e.ctrlKey || e.metaKey)) {
       this[this._ctrlKeysMap[e.keyCode]](e);
     }
     else {
@@ -25711,8 +25832,19 @@ fabric.util.object.extend(fabric.IText.prototype, /** @lends fabric.IText.protot
         offsetEnd = this.selectionEnd || 0,
         textLength = this.text.length,
         newTextLength = this.hiddenTextarea.value.length,
-        diff = newTextLength - textLength + offsetEnd - offset,
-        charsToInsert = this.hiddenTextarea.value.slice(offset, offset + diff);
+        diff, charsToInsert, start;
+    if (newTextLength > textLength) {
+      //we added some character
+      start = this._selectionDirection === 'left' ? offsetEnd : offset;
+      diff = newTextLength - textLength;
+      charsToInsert = this.hiddenTextarea.value.slice(start, start + diff);
+    }
+    else {
+      //we selected a portion of text and then input something else.
+      //Internet explorer does not trigger this else
+      diff = newTextLength - textLength + offsetEnd - offset;
+      charsToInsert = this.hiddenTextarea.value.slice(offset, offset + diff);
+    }
     this.insertChars(charsToInsert);
     e.stopPropagation();
   },
@@ -25722,6 +25854,8 @@ fabric.util.object.extend(fabric.IText.prototype, /** @lends fabric.IText.protot
    */
   onCompositionStart: function() {
     this.inCompositionMode = true;
+    this.prevCompositionLength = 0;
+    this.compositionStart = this.selectionStart;
   },
 
   /**
@@ -25729,6 +25863,18 @@ fabric.util.object.extend(fabric.IText.prototype, /** @lends fabric.IText.protot
    */
   onCompositionEnd: function() {
     this.inCompositionMode = false;
+  },
+
+  /**
+   * Composition update
+   */
+  onCompositionUpdate: function(e) {
+    var data = e.data;
+    this.selectionStart = this.compositionStart;
+    this.selectionEnd = this.selectionEnd === this.selectionStart ?
+      this.compositionStart + this.prevCompositionLength : this.selectionEnd;
+    this.insertChars(data, false);
+    this.prevCompositionLength = data.length;
   },
 
   /**
@@ -25749,6 +25895,10 @@ fabric.util.object.extend(fabric.IText.prototype, /** @lends fabric.IText.protot
    * @param {Event} e Event object
    */
   copy: function(e) {
+    if (this.selectionStart === this.selectionEnd) {
+      //do not cut-copy if no selection
+      return;
+    }
     var selectedText = this.getSelectedText(),
         clipboardData = this._getClipboardData(e);
 
@@ -25761,6 +25911,9 @@ fabric.util.object.extend(fabric.IText.prototype, /** @lends fabric.IText.protot
     fabric.copiedTextStyle = this.getSelectionStyles(
                           this.selectionStart,
                           this.selectionEnd);
+    e.stopImmediatePropagation();
+    e.preventDefault();
+    this._copyDone = true;
   },
 
   /**
@@ -25799,7 +25952,7 @@ fabric.util.object.extend(fabric.IText.prototype, /** @lends fabric.IText.protot
       return;
     }
 
-    this.copy();
+    this.copy(e);
     this.removeChars(e);
   },
 
@@ -25809,7 +25962,7 @@ fabric.util.object.extend(fabric.IText.prototype, /** @lends fabric.IText.protot
    * @return {Object} Clipboard data object
    */
   _getClipboardData: function(e) {
-    return e && (e.clipboardData || fabric.window.clipboardData);
+    return (e && e.clipboardData) || fabric.window.clipboardData;
   },
 
   /**
@@ -26865,10 +27018,11 @@ fabric.util.object.extend(fabric.IText.prototype, /** @lends fabric.IText.protot
       var w = t.width * ((localMouse.x / transform.scaleX) / (t.width + t.strokeWidth));
       if (w >= t.getMinWidth()) {
         t.set('width', w);
+        return true;
       }
     }
     else {
-      setObjectScaleOverridden.call(fabric.Canvas.prototype, localMouse, transform,
+      return setObjectScaleOverridden.call(fabric.Canvas.prototype, localMouse, transform,
         lockScalingX, lockScalingY, by, lockScalingFlip, _dim);
     }
   };
