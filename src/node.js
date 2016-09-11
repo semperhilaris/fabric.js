@@ -122,25 +122,16 @@
 
   fabric.util.getScript = function(url, callback) {
     request(url, '', function(body) {
+      // eslint-disable-next-line no-eval
       eval(body);
       callback && callback();
     });
   };
 
-  fabric.Image.fromObject = function(object, callback) {
-    fabric.util.loadImage(object.src, function(img) {
-      var oImg = new fabric.Image(img);
+  // fabric.util.createCanvasElement = function(_, width, height) {
+  //   return new Canvas(width, height);
+  // }
 
-      oImg._initConfig(object);
-      oImg._initFilters(object.filters, function(filters) {
-        oImg.filters = filters || [ ];
-        oImg._initFilters(object.resizeFilters, function(resizeFilters) {
-          oImg.resizeFilters = resizeFilters || [ ];
-          callback && callback(oImg);
-        });
-      });
-    });
-  };
   /**
    * Only available when running fabric on node.js
    * @param {Number} width Canvas width
@@ -153,7 +144,8 @@
     nodeCanvasOptions = nodeCanvasOptions || options;
 
     var canvasEl = fabric.document.createElement('canvas'),
-        nodeCanvas = new Canvas(width || 600, height || 600, nodeCanvasOptions);
+        nodeCanvas = new Canvas(width || 600, height || 600, nodeCanvasOptions),
+        nodeCacheCanvas = new Canvas(width || 600, height || 600, nodeCanvasOptions);
 
     // jsdom doesn't create style on canvas element, so here be temp. workaround
     canvasEl.style = { };
@@ -166,6 +158,8 @@
 
     fabricCanvas.contextContainer = nodeCanvas.getContext('2d');
     fabricCanvas.nodeCanvas = nodeCanvas;
+    fabricCanvas.contextCache = nodeCacheCanvas.getContext('2d');
+    fabricCanvas.nodeCacheCanvas = nodeCacheCanvas;
     fabricCanvas.Font = Canvas.Font;
 
     return fabricCanvas;
